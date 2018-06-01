@@ -82,7 +82,7 @@ if [ "$1" == "" ] || [ "$1" == "help" ] || [ "$1" == "-h" ] || [ "$1" == "--help
 
 elif [ "$1" != "here" ]; then
 	# execute on remote host when target is not "here"
-	cat $0 | ssh $1 "/bin/bash -- /dev/stdin here \"$2\" \"$3\" \"$STB_COLORS\""
+	ssh $1 "/bin/bash -- /dev/stdin here \"$2\" \"$3\" \"$STB_COLORS\"" < "$0"
 	
 	# defuse trap and exit
 	trap "" EXIT
@@ -125,8 +125,6 @@ else
 	function info() {
 		myLastinfo="$1"
 		echo -en "${colorGreen}"
-		echo -n "${myHostname}  "
-		echo -n "$(date '+%Y-%m-%d %H:%M:%S')  "
 		echo "$1"
 		echo -en "${colorReset}"
 	}
@@ -138,9 +136,7 @@ else
 		fi;
 		
 		echo -en "${colorRed}" > /dev/stderr
-		echo -n "${myHostname}  " > /dev/stderr
-		echo -n "$(date '+%Y-%m-%d %H:%M:%S')  " > /dev/stderr
-		echo "$err failed" > /dev/stderr
+		echo "$err failed on $myHostname @ $(date '+%Y-%m-%d %H:%M:%S')" > /dev/stderr
 		echo -en "${colorReset}" > /dev/stderr
 		
 		# defuse trap and exit
@@ -149,8 +145,6 @@ else
 	}
 	function pipeinfo() {
 		while read out; do
-			echo -n "${myHostname}  "
-			echo -n "$(date '+%Y-%m-%d %H:%M:%S')  "
 			echo "$out"
 		done;
 	}
@@ -199,9 +193,9 @@ else
 		echo "Signature: 8a477f597d28d172789f06886806bc55" > CACHEDIR.TAG || error "Marking test dir to be excluded from backups"
 		
 		if [ "$mySpecificTest" == "" ]; then
-			info "Running tests in \"$myPath/$myDirname\" ..."
+			info "Running tests in \"$myPath/$myDirname\" on $myHostname @ $(date '+%Y-%m-%d %H:%M:%S') ..."
 		else
-			info "Repeating test \"$mySpecificTest\" ..."
+			info "Repeating test \"$mySpecificTest\" in \"$myPath/$myDirname\" on $myHostname @ $(date '+%Y-%m-%d %H:%M:%S') ..."
 		fi;
 		info "storage-tuner-benchmark version $myVersion"
 		
@@ -229,11 +223,11 @@ else
 		runFio "Single file and thread rnd 16k readwrite direct" $myFioSingleFile --ioengine=libaio   --iodepth=1 --direct=1 --fdatasync=1 --rw=randrw    --bs=16k --runtime=5 --time_based
 		
 		if [ "$mySpecificTest" == "" ]; then
-			info "Tests complete."
+			info "Tests complete on $myHostname @ $(date '+%Y-%m-%d %H:%M:%S')."
 			info "Files remain. To clean up, add argument \"cleanup\"."
 			info "To run only a specific test, add its name in quotes as argument, e.g. \"Many files seq write\""
 		else
-			info "Test complete."
+			info "Test complete on $myHostname @ $(date '+%Y-%m-%d %H:%M:%S')."
 		fi;
 	fi;
 	# defuse trap and exit
