@@ -19,7 +19,7 @@
 
 #   Source: https://github.com/Korkman/storage-tuner-benchmark
 
-myVersion="1.0"
+myVersion="1.0.1"
 
 # trapping "kill 0" to kill subprocesses when interrupted by user
 trap "exit 2" INT TERM
@@ -218,7 +218,7 @@ else
 		# this test also inits the test file, it must be run first
 		runFio "Single file seq write"                $myFioSingleFile --ioengine=psync    --iodepth=1  --direct=0 --rw=write --end_fsync=1 --bs=4M
 		runFio "Single file seq read direct"          $myFioSingleFile --ioengine=libaio   --iodepth=1  --direct=1 --rw=read  --bs=4M --runtime=5 --time_based
-		runFio "Single file rnd 16k write"            $myFioSingleFile --ioengine=libaio   --iodepth=16 --direct=1 --fdatasync=1 --rw=randwrite --bs=16k --runtime=5 --time_based
+		runFio "Single file rnd 16k write"            $myFioSingleFile --ioengine=libaio   --iodepth=16 --direct=0 --fdatasync=1 --rw=randwrite --bs=16k --runtime=5 --time_based
 		runFio "Single file rnd 16k write direct"     $myFioSingleFile --ioengine=libaio   --iodepth=16 --direct=1 --fdatasync=1 --rw=randwrite --bs=16k --runtime=5 --time_based
 		runFio "Single file rnd 16k readwrite direct" $myFioSingleFile --ioengine=libaio   --iodepth=16 --direct=1 --fdatasync=1 --rw=randrw    --bs=16k --runtime=5 --time_based
 		runFio "Single file rnd 16k write mmap"       $myFioSingleFile --ioengine=mmap     --iodepth=16 --direct=1 --fdatasync=1 --rw=randwrite --bs=16k --runtime=5 --time_based
