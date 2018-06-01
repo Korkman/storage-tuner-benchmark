@@ -19,7 +19,7 @@
 
 #   Source: https://github.com/Korkman/storage-tuner-benchmark
 
-myVersion="1.0.2"
+myVersion="1.0.3"
 
 # trapping "kill 0" to kill subprocesses when interrupted by user
 trap "exit 2" INT TERM
@@ -140,7 +140,7 @@ else
 		echo -en "${colorRed}" > /dev/stderr
 		echo -n "${myHostname}  " > /dev/stderr
 		echo -n "$(date '+%Y-%m-%d %H:%M:%S')  " > /dev/stderr
-		echo "$1 failed" > /dev/stderr
+		echo "$err failed" > /dev/stderr
 		echo -en "${colorReset}" > /dev/stderr
 		
 		# defuse trap and exit
@@ -161,8 +161,8 @@ else
 			return
 		else
 			info "Test \"$testname\""
-			#info "fio --name=\"test\" $*"
-			(fio --name="test" $* || error) | grep -E "(iops)" | pipeinfo
+			#info "fio --name=\"test\" $@"
+			(fio --name="test" $@ || error) | grep -E "(iops)" | pipeinfo
 		fi;
 	}
 	
