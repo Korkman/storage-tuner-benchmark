@@ -25,7 +25,7 @@ Install fio (apt-get/yum install fio) or execute storage-tuner-benchmark with ro
 
 # Usage
 ```
-storage-tuner-benchmark 1.0
+storage-tuner-benchmark 1.0.0
 
 Quick but meaningful storage benchmark utility
 
