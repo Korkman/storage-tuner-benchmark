@@ -80,8 +80,10 @@ yourhost  2018-06-01 13:21:07  read : io=6400.0KB, bw=1279.3KB/s, iops=79, runt=
 yourhost  2018-06-01 13:21:07  write: io=5808.0KB, bw=1160.1KB/s, iops=72, runt=  5003msec
 yourhost  2018-06-01 13:21:07  Tests complete.
 ```
-## Tests and their meaning
+## Should I run only tests I care about?
+No, not in general. Selective testing is only meant for bottleneck resolving. After resolving a bottleneck, always compare full runs from before and after to identify potentially negative impacts on other tests. Also, when sharing results with others, always share full results. Trade-offs in storage tuning are totally legit, but they need to be understood and visible.
 
+## Tests and their meaning
 All tests share the following fio flags:
 ```
 --fallocate=none --group_reporting --verify=0 --disable_lat=1 --disable_clat=1 --disable_slat=1 --clat_percentiles=0 --refill_buffers --randrepeat=0
