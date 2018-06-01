@@ -1,4 +1,6 @@
-#! /bin/bash
+#! /bin/sh
+#set -u
+set -e
 {
 
 #   storage-tuner-benchmark - quick but meaningful storage benchmark utility
@@ -19,15 +21,15 @@
 
 #   Source: https://github.com/Korkman/storage-tuner-benchmark
 
-myVersion="1.0.3"
+myVersion="1.1.0"
 
 # trapping "kill 0" to kill subprocesses when interrupted by user
 trap "exit 2" INT TERM
 trap "kill 0" EXIT
 
 # coordinate colors
-if [ "$STB_COLORS" == "" ]; then
-	if [ "$4" == "" ]; then
+if [ "$STB_COLORS" = "" ]; then
+	if [ "$4" = "" ]; then
 		if [ -t 1 ]; then
 			# not passed as env, not as internal argument $4 and is interactive terminal
 			STB_COLORS="yes"
@@ -39,7 +41,7 @@ if [ "$STB_COLORS" == "" ]; then
 	fi;
 fi;
 
-if [ "$1" == "" ] || [ "$1" == "help" ] || [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
+if [ "$1" = "" ] || [ "$1" = "help" ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
 	# if no arguments given or is "help", show usage
 	echo "storage-tuner-benchmark $myVersion"
 	echo ""
@@ -82,7 +84,7 @@ if [ "$1" == "" ] || [ "$1" == "help" ] || [ "$1" == "-h" ] || [ "$1" == "--help
 
 elif [ "$1" != "here" ]; then
 	# execute on remote host when target is not "here"
-	ssh $1 "/bin/bash -- /dev/stdin here \"$2\" \"$3\" \"$STB_COLORS\"" < "$0"
+	ssh "$1" "/bin/sh -- /dev/stdin here \"$2\" \"$3\" \"$STB_COLORS\"" < "$0"
 	
 	# defuse trap and exit
 	trap "" EXIT
@@ -90,73 +92,98 @@ elif [ "$1" != "here" ]; then
 
 else
 	# execute tests
-	myHostname="$HOSTNAME"
+	myHostname="$(uname -n)"
 	myLastinfo=""
 	myDirname="stb-testdir"
 	myPath=~
-	myFioBasics="--fallocate=none --group_reporting --verify=0 --disable_lat=1 --disable_clat=1 --disable_slat=1 --clat_percentiles=0 --refill_buffers"
-	myFioManyFiles="$myFioBasics --size=32M --numjobs=16 --randrepeat=0"
-	myFioSingleFile="$myFioBasics --size=512M --numjobs=1 --randrepeat=0"
+	myFioBasics="--fallocate=none --group_reporting --verify=0 --disable_lat=1 --disable_clat=1 --disable_slat=1 --clat_percentiles=0 --refill_buffers --randrepeat=0"
+	fioTL="--runtime=5 --time_based"
+	fioMany="$myFioBasics --size=32M --numjobs=16"
+	fioOne="$myFioBasics --size=512M --numjobs=1"
 	myCleanup=false
 	mySpecificTest=""
-	if [ "$STB_COLORS" == "yes" ]; then
+	if [ "$STB_COLORS" = "yes" ]; then
 		# use colors when interactive terminal
 		colorRed='\033[0;31m'
 		colorGreen='\033[0;32m'
+		colorYellow='\033[1;33m'
+		colorWhite='\033[0;37m'
 		colorReset='\033[0m'
 	else
 		# no colors when output is redirected
 		colorRed=''
 		colorGreen=''
+		colorYellow=''
+		colorWhite=''
 		colorReset=''
 	fi;
-	if [ "$2" == "cleanup" ]; then
+	if [ "$2" = "cleanup" ]; then
 		myCleanup=true
 	elif [ "$2" != "" ]; then
 		myPath="$2";
 		
-		if [ "$3" == "cleanup" ]; then
+		if [ "$3" = "cleanup" ]; then
 			myCleanup=true
 		elif [ "$3" != "" ]; then
 			mySpecificTest="$3"
 		fi;
 	fi;
 	
-	function info() {
+	info() {
+		# generic info printout function
 		myLastinfo="$1"
-		echo -en "${colorGreen}"
 		echo "$1"
-		echo -en "${colorReset}"
 	}
-	function error() {
+	error() {
+		# generic error printout function
 		if [ "$1" != "" ]; then
-			local err="$1"
+			err="$1"
 		else
-			local err="$myLastinfo"
+			err="$myLastinfo"
 		fi;
 		
-		echo -en "${colorRed}" > /dev/stderr
-		echo "$err failed on $myHostname @ $(date '+%Y-%m-%d %H:%M:%S')" > /dev/stderr
-		echo -en "${colorReset}" > /dev/stderr
+		printf "$colorRed" >&2
+		echo "$err failed on $myHostname @ $(date '+%Y-%m-%d %H:%M:%S')" >&2
+		printf "$colorReset" >&2
 		
 		# defuse trap and exit
 		trap "" EXIT
 		exit 1
 	}
-	function pipeinfo() {
-		while read out; do
-			echo "$out"
-		done;
+	ignore() {
+		# generic noop function to cancel set -e
+		return 0
 	}
-	function runFio() {
-		local testname="$1"
+	testlead() {
+		# lead output for test result
+		printf "%s" "$1"
+	}
+	testresult() {
+		# result output
+		printf "$colorGreen"
+		printf "%s\n" "$1"
+		printf "$colorReset"
+	}
+	runFio() {
+		# run fio and output iops only, pass most args to fio
+		testname="$1"
 		shift
 		if [ "$mySpecificTest" != "" ] && [ "$mySpecificTest" != "$testname" ]; then
 			return
 		else
-			info "Test \"$testname\""
-			#info "fio --name=\"test\" $@"
-			(fio --name="test" $@ || error) | grep -E "(iops)" | pipeinfo
+			testlead "$testname: "
+			iops=$(fio --name="test" "$@") || error "Running test \"$testname\""
+			iops_read=$(printf "%s" "$iops" | grep -E "read.*iops=") || ignore
+			iops_read=$(printf "%s" "$iops_read" | sed 's/.*iops=\([0-9]\+\).*/\1/') || error "Reducing output to iops"
+			iops_write=$(printf "%s" "$iops" | grep -E "write.*iops=") || ignore
+			iops_write=$(printf "%s" "$iops_write" | sed 's/.*iops=\([0-9]\+\).*/\1/') || error "Reducing output to iops"
+			if [ "$iops_read" != "" ] && [ "$iops_write" != "" ]; then
+				testresult "$iops_read read iops, $iops_write write iops"
+			elif [ "$iops_read" != "" ]; then
+				testresult "$iops_read read iops"
+			elif [ "$iops_write" != "" ]; then
+				testresult "$iops_write write iops"
+			fi;
 		fi;
 	}
 	
@@ -169,6 +196,7 @@ else
 	else
 		cd "$myPath" || error "Changing to workdir"
 		
+		# install fio if missing
 		if [ ! -e "/usr/bin/fio" ]; then
 			info "Installing fio"
 			if [ -e "/usr/bin/apt-get" ]; then
@@ -179,6 +207,8 @@ else
 				error "Detecting install tool"
 			fi;
 		fi;
+		
+		# create test directory if missing
 		if [ ! -e "$myDirname" ]; then
 			if [ "$mySpecificTest" != "" ]; then
 				info "Test directory must pre-exist to repeat a specific test"
@@ -188,41 +218,42 @@ else
 				mkdir "$myDirname" || error
 			fi;
 		fi;
+		
 		cd "$myDirname" || error "Changing to test directory"
 		
 		echo "Signature: 8a477f597d28d172789f06886806bc55" > CACHEDIR.TAG || error "Marking test dir to be excluded from backups"
 		
-		if [ "$mySpecificTest" == "" ]; then
+		if [ "$mySpecificTest" = "" ]; then
 			info "Running tests in \"$myPath/$myDirname\" on $myHostname @ $(date '+%Y-%m-%d %H:%M:%S') ..."
 		else
 			info "Repeating test \"$mySpecificTest\" in \"$myPath/$myDirname\" on $myHostname @ $(date '+%Y-%m-%d %H:%M:%S') ..."
 		fi;
 		info "storage-tuner-benchmark version $myVersion"
 		
-		# v1.0 synthetic group of tests
+		# v1.1.0 synthetic group of tests
 		
 		# this test also inits the test files, it must be run first
-		runFio "Many files seq write"                 $myFioManyFiles --ioengine=psync  --iodepth=1 --direct=0 --rw=write --end_fsync=1 --bs=4M
-		runFio "Many files seq read direct"           $myFioManyFiles --ioengine=libaio --iodepth=1 --direct=1 --rw=read --bs=4M --runtime=5 --time_based
-		runFio "Many files rnd 4k read direct"        $myFioManyFiles --ioengine=libaio --iodepth=1 --direct=1 --rw=randread --bs=4k --runtime=5 --time_based
-		runFio "Many files rnd 16k read direct"       $myFioManyFiles --ioengine=libaio --iodepth=1 --direct=1 --rw=randread --bs=16k --runtime=5 --time_based
-		runFio "Many files rnd 4k write direct"       $myFioManyFiles --ioengine=libaio --iodepth=1 --direct=1 --fdatasync=1 --rw=randwrite --bs=4k --runtime=5 --time_based
-		runFio "Many files rnd 16k write direct"      $myFioManyFiles --ioengine=libaio --iodepth=1 --direct=1 --fdatasync=1 --rw=randwrite --bs=16k --runtime=5 --time_based
+		runFio "16 files, 1 thread each, seq 4M writes"            $fioMany        --ioengine=psync   --direct=0 --iodepth=1 --bs=4M  --rw=write --end_fsync=1
+		runFio "16 files, 1 thread each, seq 4M reads, direct"     $fioMany $fioTL --ioengine=libaio  --direct=1 --iodepth=1 --bs=4M  --rw=read    
+		runFio "16 files, 1 thread each, rnd 4k reads, direct"     $fioMany $fioTL --ioengine=libaio  --direct=1 --iodepth=1 --bs=4k  --rw=randread
+		runFio "16 files, 1 thread each, rnd 16k reads, direct"    $fioMany $fioTL --ioengine=libaio  --direct=1 --iodepth=1 --bs=16k --rw=randread
+		runFio "16 files, 1 thread each, rnd 4k writes, direct"    $fioMany $fioTL --ioengine=libaio  --direct=1 --iodepth=1 --bs=4k  --rw=randwrite --fdatasync=1
+		runFio "16 files, 1 thread each, rnd 16k writes, direct"   $fioMany $fioTL --ioengine=libaio  --direct=1 --iodepth=1 --bs=16k --rw=randwrite --fdatasync=1
 		
 		# this test also inits the test file, it must be run first
-		runFio "Single file and thread seq write"        $myFioSingleFile --ioengine=psync    --iodepth=1  --direct=0 --rw=write --end_fsync=1 --bs=4M
-		runFio "Single file and thread seq read direct"  $myFioSingleFile --ioengine=libaio   --iodepth=1  --direct=1 --rw=read  --bs=4M --runtime=5 --time_based
-		runFio "Single file rnd 16k write"               $myFioSingleFile --ioengine=psync    --iodepth=16 --direct=0 --fdatasync=1 --rw=randwrite --bs=16k --runtime=5 --time_based
-		runFio "Single file rnd 16k write direct"        $myFioSingleFile --ioengine=libaio   --iodepth=16 --direct=1 --fdatasync=1 --rw=randwrite --bs=16k --runtime=5 --time_based
-		runFio "Single file rnd 16k readwrite direct"    $myFioSingleFile --ioengine=libaio   --iodepth=16 --direct=1 --fdatasync=1 --rw=randrw    --bs=16k --runtime=5 --time_based
-		runFio "Single file rnd 16k write mmap"          $myFioSingleFile --ioengine=mmap     --iodepth=16 --direct=1 --fdatasync=1 --rw=randwrite --bs=16k --runtime=5 --time_based
-		runFio "Single file rnd 16k write posixaio"      $myFioSingleFile --ioengine=posixaio --iodepth=16 --direct=1 --fdatasync=1 --rw=randwrite --bs=16k --runtime=5 --time_based
+		runFio "1 file, 1 thread, seq 4M writes"                   $fioOne        --ioengine=psync    --direct=0 --iodepth=1  --bs=4M  --rw=write --end_fsync=1
+		runFio "1 file, 1 thread, seq 4M reads, direct"            $fioOne $fioTL --ioengine=libaio   --direct=1 --iodepth=1  --bs=4M  --rw=read 
+		runFio "1 file, 16 threads, rnd 16k writes"                $fioOne $fioTL --ioengine=psync    --direct=0 --iodepth=16 --bs=16k --rw=randwrite --fdatasync=1
+		runFio "1 file, 16 threads, rnd 16k writes, direct"        $fioOne $fioTL --ioengine=libaio   --direct=1 --iodepth=16 --bs=16k --rw=randwrite --fdatasync=1
+		runFio "1 file, 16 threads, rnd 16k readwrites, direct"    $fioOne $fioTL --ioengine=libaio   --direct=1 --iodepth=16 --bs=16k --rw=randrw    --fdatasync=1
+		runFio "1 file, 16 threads, rnd 16k writes, mmap"          $fioOne $fioTL --ioengine=mmap     --direct=1 --iodepth=16 --bs=16k --rw=randwrite --fdatasync=1
+		runFio "1 file, 16 threads, rnd 16k writes, posixaio"      $fioOne $fioTL --ioengine=posixaio --direct=1 --iodepth=16 --bs=16k --rw=randwrite --fdatasync=1
 		
-		runFio "Single file and thread rnd 16k write"            $myFioSingleFile --ioengine=psync    --iodepth=1 --direct=0 --fdatasync=1 --rw=randwrite --bs=16k --runtime=5 --time_based
-		runFio "Single file and thread rnd 16k write direct"     $myFioSingleFile --ioengine=libaio   --iodepth=1 --direct=1 --fdatasync=1 --rw=randwrite --bs=16k --runtime=5 --time_based
-		runFio "Single file and thread rnd 16k readwrite direct" $myFioSingleFile --ioengine=libaio   --iodepth=1 --direct=1 --fdatasync=1 --rw=randrw    --bs=16k --runtime=5 --time_based
+		runFio "1 file, 1 thread, rnd 16k writes"                  $fioOne $fioTL --ioengine=psync    --direct=0 --iodepth=1  --bs=16k --rw=randwrite --fdatasync=1
+		runFio "1 file, 1 thread, rnd 16k writes, direct"          $fioOne $fioTL --ioengine=libaio   --direct=1 --iodepth=1  --bs=16k --rw=randwrite --fdatasync=1
+		runFio "1 file, 1 thread, rnd 16k readwrites, direct"      $fioOne $fioTL --ioengine=libaio   --direct=1 --iodepth=1  --bs=16k --rw=randrw    --fdatasync=1
 		
-		if [ "$mySpecificTest" == "" ]; then
+		if [ "$mySpecificTest" = "" ]; then
 			info "Tests complete on $myHostname @ $(date '+%Y-%m-%d %H:%M:%S')."
 			info "Files remain. To clean up, add argument \"cleanup\"."
 			info "To run only a specific test, add its name in quotes as argument, e.g. \"Many files seq write\""
