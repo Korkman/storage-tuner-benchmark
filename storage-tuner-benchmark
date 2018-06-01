@@ -1,0 +1,245 @@
+#! /bin/bash
+{
+
+#   storage-tuner-benchmark - quick but meaningful storage benchmark utility
+#   Copyright (C) 2018  Pierre Beck
+#
+#   This program is free software: you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License as published by
+#   the Free Software Foundation, either version 3 of the License, or
+#   (at your option) any later version.
+#
+#   This program is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#   GNU General Public License for more details.
+#
+#   You should have received a copy of the GNU General Public License
+#   along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+#   Source: https://github.com/Korkman/storage-tuner-benchmark
+
+myVersion="1.0"
+
+# trapping "kill 0" to kill subprocesses when interrupted by user
+trap "exit 2" INT TERM
+trap "kill 0" EXIT
+
+# coordinate colors
+if [ "$STB_COLORS" == "" ]; then
+	if [ "$4" == "" ]; then
+		if [ -t 1 ]; then
+			# not passed as env, not as internal argument $4 and is interactive terminal
+			STB_COLORS="yes"
+		else
+			STB_COLORS="no"
+		fi;
+	else
+		STB_COLORS="$4"
+	fi;
+fi;
+
+if [ "$1" == "" ] || [ "$1" == "help" ] || [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
+	# if no arguments given or is "help", show usage
+	echo "storage-tuner-benchmark $myVersion"
+	echo ""
+	echo "Quick but meaningful storage benchmark utility"
+	echo ""
+	echo "Usage: storage-tuner-benchmark <target> [path|cleanup [testname|cleanup] ]"
+	echo ""
+	echo "target        Required. Any of:"
+	echo "              here            run on local system"
+	echo "              user@hostname   run on remote system via ssh"
+	echo ""
+	echo "path          Optional. Base directory where a new directory will "
+	echo "              be created containing test files."
+	echo "              Default: home directory"
+	echo ""
+	echo "testname      Optional. Name of a specific test in quotes."
+	echo "              Default: run all tests"
+	echo ""
+	echo "cleanup       Optional. Deletes test files directory. Run this"
+	echo "              when done tuning."
+	echo ""
+	echo "Pre-requisites: fio, the benchmark tool, will be installed via apt-get"
+	echo "or yum when missing."
+	echo ""
+	echo "Examples:"
+	echo ""
+	echo "              storage-tuner-benchmark here /mnt"
+	echo "              Creates \"stb-testdir\" in /mnt and runs all tests."
+	echo ""
+	echo "              storage-tuner-benchmark here /mnt \"Many files seq write\""
+	echo "              Repeats the test named \"Many files seq write\"."
+	echo ""
+	echo "              storage-tuner-benchmark here /mnt cleanup"
+	echo "              Will rm -rf /mnt/stb-testdir"
+	echo ""
+	
+	# defuse trap and exit
+	trap "" EXIT
+	exit 1
+
+elif [ "$1" != "here" ]; then
+	# execute on remote host when target is not "here"
+	cat $0 | ssh $1 "/bin/bash -- /dev/stdin here \"$2\" \"$3\" \"$STB_COLORS\""
+	
+	# defuse trap and exit
+	trap "" EXIT
+	exit 0
+
+else
+	# execute tests
+	myHostname="$HOSTNAME"
+	myLastinfo=""
+	myDirname="stb-testdir"
+	myPath=~
+	myFioBasics="--fallocate=none --group_reporting --verify=0 --disable_lat=1 --disable_clat=1 --disable_slat=1 --clat_percentiles=0 --refill_buffers"
+	myFioManyFiles="$myFioBasics --size=32M --numjobs=16 --randrepeat=0"
+	myFioSingleFile="$myFioBasics --size=512M --numjobs=1 --randrepeat=0"
+	myCleanup=false
+	mySpecificTest=""
+	if [ "$STB_COLORS" == "yes" ]; then
+		# use colors when interactive terminal
+		colorRed='\033[0;31m'
+		colorGreen='\033[0;32m'
+		colorReset='\033[0m'
+	else
+		# no colors when output is redirected
+		colorRed=''
+		colorGreen=''
+		colorReset=''
+	fi;
+	if [ "$2" == "cleanup" ]; then
+		myCleanup=true
+	elif [ "$2" != "" ]; then
+		myPath="$2";
+		
+		if [ "$3" == "cleanup" ]; then
+			myCleanup=true
+		elif [ "$3" != "" ]; then
+			mySpecificTest="$3"
+		fi;
+	fi;
+	
+	function info() {
+		myLastinfo="$1"
+		echo -en "${colorGreen}"
+		echo -n "${myHostname}  "
+		echo -n "$(date '+%Y-%m-%d %H:%M:%S')  "
+		echo "$1"
+		echo -en "${colorReset}"
+	}
+	function error() {
+		if [ "$1" != "" ]; then
+			local err="$1"
+		else
+			local err="$myLastinfo"
+		fi;
+		
+		echo -en "${colorRed}" > /dev/stderr
+		echo -n "${myHostname}  " > /dev/stderr
+		echo -n "$(date '+%Y-%m-%d %H:%M:%S')  " > /dev/stderr
+		echo "$1 failed" > /dev/stderr
+		echo -en "${colorReset}" > /dev/stderr
+		
+		# defuse trap and exit
+		trap "" EXIT
+		exit 1
+	}
+	function pipeinfo() {
+		while read out; do
+			echo -n "${myHostname}  "
+			echo -n "$(date '+%Y-%m-%d %H:%M:%S')  "
+			echo "$out"
+		done;
+	}
+	function runFio() {
+		local testname="$1"
+		shift
+		if [ "$mySpecificTest" != "" ] && [ "$mySpecificTest" != "$testname" ]; then
+			return
+		else
+			info "Test \"$testname\""
+			#info "fio --name=\"test\" $*"
+			(fio --name="test" $* || error) | grep -E "(iops)" | pipeinfo
+		fi;
+	}
+	
+	if $myCleanup; then
+		info "Cleanup"
+		cd "$myPath" || error "Changing to workdir"
+		[ -e "$myDirname/CACHEDIR.TAG" ] || error "Ensuring \"$myPath/$myDirname/CACHEDIR.TAG\" exists"
+		rm -rf "$myDirname" || error "Deleting test directory"
+		info "Done."
+	else
+		cd "$myPath" || error "Changing to workdir"
+		
+		if [ ! -e "/usr/bin/fio" ]; then
+			info "Installing fio"
+			if [ -e "/usr/bin/apt-get" ]; then
+				/usr/bin/apt-get -y install fio || error
+			elif [ -e "/usr/bin/yum" ]; then
+				/usr/bin/yum -y install fio || error
+			else
+				error "Detecting install tool"
+			fi;
+		fi;
+		if [ ! -e "$myDirname" ]; then
+			if [ "$mySpecificTest" != "" ]; then
+				info "Test directory must pre-exist to repeat a specific test"
+				error "Re-using existing testdir"
+			else
+				info "Creating test directory \"$myDirname\""
+				mkdir "$myDirname" || error
+			fi;
+		fi;
+		cd "$myDirname" || error "Changing to test directory"
+		
+		echo "Signature: 8a477f597d28d172789f06886806bc55" > CACHEDIR.TAG || error "Marking test dir to be excluded from backups"
+		
+		if [ "$mySpecificTest" == "" ]; then
+			info "Running tests in \"$myPath/$myDirname\" ..."
+		else
+			info "Repeating test \"$mySpecificTest\" ..."
+		fi;
+		info "storage-tuner-benchmark version $myVersion"
+		
+		# v1.0 synthetic group of tests
+		
+		# this test also inits the test files, it must be run first
+		runFio "Many files seq write"                 $myFioManyFiles --ioengine=psync  --iodepth=1 --direct=0 --rw=write --end_fsync=1 --bs=4M
+		runFio "Many files seq read direct"           $myFioManyFiles --ioengine=libaio --iodepth=1 --direct=1 --rw=read --bs=4M --runtime=5 --time_based
+		runFio "Many files rnd 4k read direct"        $myFioManyFiles --ioengine=libaio --iodepth=1 --direct=1 --rw=randread --bs=4k --runtime=5 --time_based
+		runFio "Many files rnd 16k read direct"       $myFioManyFiles --ioengine=libaio --iodepth=1 --direct=1 --rw=randread --bs=16k --runtime=5 --time_based
+		runFio "Many files rnd 4k write direct"       $myFioManyFiles --ioengine=libaio --iodepth=1 --direct=1 --fdatasync=1 --rw=randwrite --bs=4k --runtime=5 --time_based
+		runFio "Many files rnd 16k write direct"      $myFioManyFiles --ioengine=libaio --iodepth=1 --direct=1 --fdatasync=1 --rw=randwrite --bs=16k --runtime=5 --time_based
+		
+		# this test also inits the test file, it must be run first
+		runFio "Single file seq write"                $myFioSingleFile --ioengine=psync    --iodepth=1  --direct=0 --rw=write --end_fsync=1 --bs=4M
+		runFio "Single file seq read direct"          $myFioSingleFile --ioengine=libaio   --iodepth=1  --direct=1 --rw=read  --bs=4M --runtime=5 --time_based
+		runFio "Single file rnd 16k write"            $myFioSingleFile --ioengine=libaio   --iodepth=16 --direct=1 --fdatasync=1 --rw=randwrite --bs=16k --runtime=5 --time_based
+		runFio "Single file rnd 16k write direct"     $myFioSingleFile --ioengine=libaio   --iodepth=16 --direct=1 --fdatasync=1 --rw=randwrite --bs=16k --runtime=5 --time_based
+		runFio "Single file rnd 16k readwrite direct" $myFioSingleFile --ioengine=libaio   --iodepth=16 --direct=1 --fdatasync=1 --rw=randrw    --bs=16k --runtime=5 --time_based
+		runFio "Single file rnd 16k write mmap"       $myFioSingleFile --ioengine=mmap     --iodepth=16 --direct=1 --fdatasync=1 --rw=randwrite --bs=16k --runtime=5 --time_based
+		runFio "Single file rnd 16k write posixaio"   $myFioSingleFile --ioengine=posixaio --iodepth=16 --direct=1 --fdatasync=1 --rw=randwrite --bs=16k --runtime=5 --time_based
+		
+		runFio "Single file and thread seq write"                $myFioSingleFile --ioengine=psync    --iodepth=1 --direct=0 --rw=write --end_fsync=1 --bs=4M
+		runFio "Single file and thread rnd 16k write"            $myFioSingleFile --ioengine=libaio   --iodepth=1 --direct=0 --fdatasync=1 --rw=randwrite --bs=16k --runtime=5 --time_based
+		runFio "Single file and thread rnd 16k write direct"     $myFioSingleFile --ioengine=libaio   --iodepth=1 --direct=1 --fdatasync=1 --rw=randwrite --bs=16k --runtime=5 --time_based
+		runFio "Single file and thread rnd 16k readwrite direct" $myFioSingleFile --ioengine=libaio   --iodepth=1 --direct=1 --fdatasync=1 --rw=randrw    --bs=16k --runtime=5 --time_based
+		
+		if [ "$mySpecificTest" == "" ]; then
+			info "Tests complete."
+			info "Files remain. To clean up, add argument \"cleanup\"."
+			info "To run only a specific test, add its name in quotes as argument, e.g. \"Many files seq write\""
+		else
+			info "Test complete."
+		fi;
+	fi;
+	# defuse trap and exit
+	trap "" EXIT
+	exit 0
+fi;
+}
+exit
