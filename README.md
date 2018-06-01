@@ -15,10 +15,10 @@ Storage Tuner Benchmark aims to change that by being easy to use (no config) and
 
 It should be easy to adapt to other \*nix, and possible to adapt to Windows as well. Patches are welcome.
 
-# Installaion
+# Installation
 Download storage-tuner-benchmark directly from Github and mark executable:
 ```bash
-wget https://github.com/Korkman/storage-tuner-benchmark/blob/master/storage-tuner-benchmark
+wget https://raw.githubusercontent.com/Korkman/storage-tuner-benchmark/master/storage-tuner-benchmark
 chmod a+x storage-tuner-benchmark
 ```
 Install fio (apt-get/yum install fio) or execute storage-tuner-benchmark with root privileges to have it installed automatically.
