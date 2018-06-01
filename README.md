@@ -19,7 +19,7 @@ It should be easy to adapt to other \*nix, and possible to adapt to Windows as w
 Download storage-tuner-benchmark directly from Github and mark executable:
 ```bash
 wget https://github.com/Korkman/storage-tuner-benchmark/blob/master/storage-tuner-benchmark
-chown a+x storage-tuner-benchmark
+chmod a+x storage-tuner-benchmark
 ```
 Install fio (apt-get/yum install fio) or execute storage-tuner-benchmark with root privileges to have it installed automatically.
 
