@@ -21,7 +21,7 @@ set -e
 
 #   Source: https://github.com/Korkman/storage-tuner-benchmark
 
-myVersion="1.1.1"
+myVersion="2.0.0"
 
 # trapping "kill 0" to kill subprocesses when interrupted by user
 trap "exit 2" INT TERM
@@ -38,6 +38,15 @@ if [ "$STB_COLORS" = "" ]; then
 		fi;
 	else
 		STB_COLORS="$4"
+	fi;
+fi;
+
+# use STB_TESTGROUP to access deprecated / special interest test groups
+if [ "$STB_TESTGROUP" = "" ]; then
+	if [ "$5" = "" ]; then
+		STB_TESTGROUP="current"
+	else
+		STB_TESTGROUP="$5"
 	fi;
 fi;
 
@@ -84,7 +93,7 @@ if [ "$1" = "" ] || [ "$1" = "help" ] || [ "$1" = "-h" ] || [ "$1" = "--help" ];
 
 elif [ "$1" != "here" ]; then
 	# execute on remote host when target is not "here"
-	ssh "$1" "/bin/sh -- /dev/stdin here \"$2\" \"$3\" \"$STB_COLORS\"" < "$0"
+	ssh "$1" "/bin/sh -- /dev/stdin here \"$2\" \"$3\" \"$STB_COLORS\" \"$STB_TESTGROUP\"" < "$0"
 	
 	# defuse trap and exit
 	trap "" EXIT
@@ -167,6 +176,7 @@ else
 		if [ "$mySpecificTest" != "" ] && [ "$mySpecificTest" != "$testname" ]; then
 			return
 		else
+			#info "fio --output-format=terse --name=\"test\" \"$*\""
 			testlead "$testname: "
 			iops=$(fio --output-format=terse --name="test" "$@") || error "Running test \"$testname\""
 			iops_read=$(printf "%s" "$iops" | cut -d ";" -f 8) || error "Reducing output to iops"
@@ -193,7 +203,11 @@ else
 		
 		# install fio if missing
 		if ! command -v fio >/dev/null 2>&1; then
-			info "Installing fio"
+			info "Installing fio (requires root privileges)"
+			if [ "$LOGNAME" != "root" ]; then
+				error
+			fi;
+			
 			# detect package manager
 			# NOTE: cannot ask user y/n when in remote execution mode
 			if [ -e "/usr/bin/apt-get" ]; then
@@ -203,18 +217,25 @@ else
 				# red hat package manager
 				/usr/bin/yum -y install fio || error
 			elif [ -e "/usr/sbin/pkg" ]; then
-				# bsd package manager
+				# freebsd package manager
 				ASSUME_ALWAYS_YES=YES /usr/sbin/pkg install fio || error
+			elif [ -e "/usr/bin/pkg" ]; then
+				# openindiana package manager
+				/usr/bin/pkg install fio || error
 			else
 				error "Detecting install tool"
 			fi;
 		fi;
 		
-		# OS detection
-		if [ $(uname) = "Linux" ]; then
+		# OS detection, set native AIO variant
+		myOS="$(uname)"
+		if [ "$myOS" = "Linux" ]; then
 			fioAio="libaio"
+		elif [ "$myOS" = "SunOS" ]; then
+			fioAio="solarisaio"
 		else
-			fioAio="posixaio"
+			# NOTE: no native AIO available for BSD!
+			fioAio=""
 		fi;
 		
 		# create test directory if missing
@@ -239,28 +260,79 @@ else
 		fi;
 		info "storage-tuner-benchmark version $myVersion"
 		
-		# v1.1.0 synthetic group of tests
+		info "Testgroup \"$STB_TESTGROUP\""
+		if [ "$STB_TESTGROUP" = "current" ]; then
+			# v2.0 testgroup - ready for ZFS
+			# NOTE: to create better comparability, the use of "--direct=1" is now banned and cached reads are just what they are
+			
+			info "===   1 file series   ==="
+			# this test also inits the test file, it must be run first in series
+			runFio "1 file, 1 thread, seq 1M writes, simple"         $fioOne        --ioengine=sync     --iodepth=1 --bs=1M    --rw=write --end_fsync=1
+			runFio "1 file, 1 thread, rnd 16k writes, simple"        $fioOne $fioTL --ioengine=sync     --iodepth=1 --bs=16k   --rw=randwrite --fdatasync=1
+			runFio "1 file, 16 threads, rnd 4k writes, posixaio"     $fioOne $fioTL --ioengine=posixaio --iodepth=16 --bs=4k   --rw=randwrite --fdatasync=1
+			runFio "1 file, 16 threads, rnd 8k writes, posixaio"     $fioOne $fioTL --ioengine=posixaio --iodepth=16 --bs=8k   --rw=randwrite --fdatasync=1
+			runFio "1 file, 16 threads, rnd 16k writes, posixaio"    $fioOne $fioTL --ioengine=posixaio --iodepth=16 --bs=16k  --rw=randwrite --fdatasync=1
+			runFio "1 file, 16 threads, rnd 16k writes, posixaio"    $fioOne $fioTL --ioengine=posixaio --iodepth=16 --bs=16k  --rw=randwrite --fdatasync=1
+			
+			info "===  16 file series   ==="
+			# this test also inits the test files, it must be run first in series
+			runFio "16 files, 1 thread each, seq 1M writes, simple"      $fioMany        --ioengine=sync      --iodepth=1  --bs=1M   --rw=write --end_fsync=1
+			runFio "16 files, 1 thread each, rnd 16k writes, simple"     $fioMany $fioTL --ioengine=sync      --iodepth=1  --bs=16k  --rw=randwrite --fdatasync=1
+			runFio "16 files, 1 thread each, rnd 16k writes, posixaio"   $fioMany $fioTL --ioengine=posixaio  --iodepth=1  --bs=16k  --rw=randwrite --fdatasync=1
+			runFio "16 files, 16 threads each, rnd 16k writes, posixaio" $fioMany $fioTL --ioengine=posixaio  --iodepth=16 --bs=16k  --rw=randwrite --fdatasync=1
+			
+			info "===   O_SYNC series   ==="
+			runFio "1 file, 1 thread, rnd 16k writes, simple, o_sync"            $fioOne $fioTL --ioengine=sync      --iodepth=1  --bs=16k  --rw=randwrite --sync=1
+			runFio "1 file, 16 threads, rnd 16k writes, posixaio, o_sync"        $fioOne $fioTL --ioengine=posixaio  --iodepth=16 --bs=16k  --rw=randwrite --sync=1
+			runFio "16 files, 1 thread each, rnd 16k writes, simple, o_sync"     $fioMany $fioTL --ioengine=sync     --iodepth=1  --bs=16k  --rw=randwrite --sync=1
+			runFio "16 files, 16 threads each, rnd 16k writes, posixaio, o_sync" $fioMany $fioTL --ioengine=posixaio --iodepth=16 --bs=16k  --rw=randwrite --sync=1
+			
+			# read tests, which are less meaningful
+			info "===    read series    ==="
+			runFio "1 file, 1 thread, seq 1M reads, simple"             $fioOne  $fioTL --ioengine=sync       --iodepth=1  --bs=1M   --rw=read     --invalidate=1
+			runFio "1 file, 16 threads, rnd 16k reads, posixaio"        $fioOne  $fioTL --ioengine=posixaio   --iodepth=16 --bs=16k  --rw=randread --invalidate=1 --sync=1
+			runFio "16 files, 1 thread each, seq 1M reads, simple"      $fioMany $fioTL --ioengine=sync       --iodepth=1  --bs=1M   --rw=read     --invalidate=1
+			runFio "16 files, 1 thread each, rnd 16k reads, posixaio"   $fioMany $fioTL --ioengine=posixaio   --iodepth=1  --bs=16k  --rw=randread --invalidate=1 --sync=1
+			runFio "16 files, 16 threads each, rnd 16k reads, posixaio" $fioMany $fioTL --ioengine=posixaio   --iodepth=16 --bs=16k  --rw=randread --invalidate=1 --sync=1
+			
+			# native aio tests
+			if [ "$fioAio" != "" ]; then
+				info "=== native aio series ==="
+				runFio "1 file, 16 threads, rnd 16k writes, native aio"         $fioOne  $fioTL --ioengine=$fioAio  --iodepth=16 --bs=16k  --rw=randwrite --fdatasync=1
+				runFio "16 files, 16 threads each, rnd 16k writes, native aio"  $fioMany $fioTL --ioengine=$fioAio  --iodepth=16 --bs=16k  --rw=randwrite --fdatasync=1
+				runFio "1 file, 16 threads, rnd 16k reads, native aio"          $fioOne  $fioTL --ioengine=$fioAio  --iodepth=16 --bs=16k  --rw=randread --invalidate=1 --sync=1
+				runFio "16 files, 16 threads each, rnd 16k reads, native aio"   $fioMany $fioTL --ioengine=$fioAio  --iodepth=16 --bs=16k  --rw=randread --invalidate=1 --sync=1
+			else
+				info "Skipping native aio tests, as they are not available on this platform ($myOS)"
+			fi;
+			
+		elif [ "$STB_TESTGROUP" = "v1" ]; then
+			# v1.1.0 synthetic group of tests
+			
+			# this test also inits the test files, it must be run first in series
+			runFio "16 files, 1 thread each, seq 4M writes"            $fioMany        --ioengine=psync   --direct=0 --iodepth=1 --bs=4M  --rw=write --end_fsync=1
+			runFio "16 files, 1 thread each, seq 4M reads, direct"     $fioMany $fioTL --ioengine=$fioAio  --direct=1 --iodepth=1 --bs=4M  --rw=read
+			runFio "16 files, 1 thread each, rnd 4k reads, direct"     $fioMany $fioTL --ioengine=$fioAio  --direct=1 --iodepth=1 --bs=4k  --rw=randread
+			runFio "16 files, 1 thread each, rnd 16k reads, direct"    $fioMany $fioTL --ioengine=$fioAio  --direct=1 --iodepth=1 --bs=16k --rw=randread
+			runFio "16 files, 1 thread each, rnd 4k writes, direct"    $fioMany $fioTL --ioengine=$fioAio  --direct=1 --iodepth=1 --bs=4k  --rw=randwrite --fdatasync=1
+			runFio "16 files, 1 thread each, rnd 16k writes, direct"   $fioMany $fioTL --ioengine=$fioAio  --direct=1 --iodepth=1 --bs=16k --rw=randwrite --fdatasync=1
+			
+			# this test also inits the test file, it must be run first in series
+			runFio "1 file, 1 thread, seq 4M writes"                   $fioOne        --ioengine=psync    --direct=0 --iodepth=1  --bs=4M  --rw=write --end_fsync=1
+			runFio "1 file, 1 thread, seq 4M reads, direct"            $fioOne $fioTL --ioengine=$fioAio   --direct=1 --iodepth=1  --bs=4M  --rw=read 
+			runFio "1 file, 16 threads, rnd 16k writes"                $fioOne $fioTL --ioengine=psync    --direct=0 --iodepth=16 --bs=16k --rw=randwrite --fdatasync=1
+			runFio "1 file, 16 threads, rnd 16k writes, direct"        $fioOne $fioTL --ioengine=$fioAio   --direct=1 --iodepth=16 --bs=16k --rw=randwrite --fdatasync=1
+			runFio "1 file, 16 threads, rnd 16k readwrites, direct"    $fioOne $fioTL --ioengine=$fioAio   --direct=1 --iodepth=16 --bs=16k --rw=randrw    --fdatasync=1
+			runFio "1 file, 16 threads, rnd 16k writes, mmap"          $fioOne $fioTL --ioengine=mmap     --direct=1 --iodepth=16 --bs=16k --rw=randwrite --fdatasync=1
+			runFio "1 file, 16 threads, rnd 16k writes, posixaio"      $fioOne $fioTL --ioengine=posixaio --direct=1 --iodepth=16 --bs=16k --rw=randwrite --fdatasync=1
+			
+			runFio "1 file, 1 thread, rnd 16k writes"                  $fioOne $fioTL --ioengine=psync    --direct=0 --iodepth=1  --bs=16k --rw=randwrite --fdatasync=1
+			runFio "1 file, 1 thread, rnd 16k writes, direct"          $fioOne $fioTL --ioengine=$fioAio   --direct=1 --iodepth=1  --bs=16k --rw=randwrite --fdatasync=1
+			runFio "1 file, 1 thread, rnd 16k readwrites, direct"      $fioOne $fioTL --ioengine=$fioAio   --direct=1 --iodepth=1  --bs=16k --rw=randrw    --fdatasync=1
+		else
+			error "Finding testgroup \"$STB_TESTGROUP\""
+		fi;
 		
-		# this test also inits the test files, it must be run first
-		runFio "16 files, 1 thread each, seq 4M writes"            $fioMany        --ioengine=psync   --direct=0 --iodepth=1 --bs=4M  --rw=write --end_fsync=1
-		runFio "16 files, 1 thread each, seq 4M reads, direct"     $fioMany $fioTL --ioengine=$fioAio  --direct=1 --iodepth=1 --bs=4M  --rw=read    
-		runFio "16 files, 1 thread each, rnd 4k reads, direct"     $fioMany $fioTL --ioengine=$fioAio  --direct=1 --iodepth=1 --bs=4k  --rw=randread
-		runFio "16 files, 1 thread each, rnd 16k reads, direct"    $fioMany $fioTL --ioengine=$fioAio  --direct=1 --iodepth=1 --bs=16k --rw=randread
-		runFio "16 files, 1 thread each, rnd 4k writes, direct"    $fioMany $fioTL --ioengine=$fioAio  --direct=1 --iodepth=1 --bs=4k  --rw=randwrite --fdatasync=1
-		runFio "16 files, 1 thread each, rnd 16k writes, direct"   $fioMany $fioTL --ioengine=$fioAio  --direct=1 --iodepth=1 --bs=16k --rw=randwrite --fdatasync=1
-		
-		# this test also inits the test file, it must be run first
-		runFio "1 file, 1 thread, seq 4M writes"                   $fioOne        --ioengine=psync    --direct=0 --iodepth=1  --bs=4M  --rw=write --end_fsync=1
-		runFio "1 file, 1 thread, seq 4M reads, direct"            $fioOne $fioTL --ioengine=$fioAio   --direct=1 --iodepth=1  --bs=4M  --rw=read 
-		runFio "1 file, 16 threads, rnd 16k writes"                $fioOne $fioTL --ioengine=psync    --direct=0 --iodepth=16 --bs=16k --rw=randwrite --fdatasync=1
-		runFio "1 file, 16 threads, rnd 16k writes, direct"        $fioOne $fioTL --ioengine=$fioAio   --direct=1 --iodepth=16 --bs=16k --rw=randwrite --fdatasync=1
-		runFio "1 file, 16 threads, rnd 16k readwrites, direct"    $fioOne $fioTL --ioengine=$fioAio   --direct=1 --iodepth=16 --bs=16k --rw=randrw    --fdatasync=1
-		runFio "1 file, 16 threads, rnd 16k writes, mmap"          $fioOne $fioTL --ioengine=mmap     --direct=1 --iodepth=16 --bs=16k --rw=randwrite --fdatasync=1
-		runFio "1 file, 16 threads, rnd 16k writes, posixaio"      $fioOne $fioTL --ioengine=posixaio --direct=1 --iodepth=16 --bs=16k --rw=randwrite --fdatasync=1
-		
-		runFio "1 file, 1 thread, rnd 16k writes"                  $fioOne $fioTL --ioengine=psync    --direct=0 --iodepth=1  --bs=16k --rw=randwrite --fdatasync=1
-		runFio "1 file, 1 thread, rnd 16k writes, direct"          $fioOne $fioTL --ioengine=$fioAio   --direct=1 --iodepth=1  --bs=16k --rw=randwrite --fdatasync=1
-		runFio "1 file, 1 thread, rnd 16k readwrites, direct"      $fioOne $fioTL --ioengine=$fioAio   --direct=1 --iodepth=1  --bs=16k --rw=randrw    --fdatasync=1
 		
 		if [ "$mySpecificTest" = "" ]; then
 			info "Tests complete on $myHostname @ $(date '+%Y-%m-%d %H:%M:%S')."
