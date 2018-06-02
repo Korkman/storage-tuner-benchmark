@@ -106,15 +106,11 @@ else
 		# use colors when interactive terminal
 		colorRed='\033[0;31m'
 		colorGreen='\033[0;32m'
-		colorYellow='\033[1;33m'
-		colorWhite='\033[0;37m'
 		colorReset='\033[0m'
 	else
 		# no colors when output is redirected
 		colorRed=''
 		colorGreen=''
-		colorYellow=''
-		colorWhite=''
 		colorReset=''
 	fi;
 	if [ "$2" = "cleanup" ]; then
@@ -172,22 +168,21 @@ else
 			return
 		else
 			testlead "$testname: "
-			iops=$(fio --name="test" "$@") || error "Running test \"$testname\""
-			iops_read=$(printf "%s" "$iops" | grep -E "read.*iops=") || ignore
-			iops_read=$(printf "%s" "$iops_read" | sed 's/.*iops=\([0-9]\+\).*/\1/') || error "Reducing output to iops"
-			iops_write=$(printf "%s" "$iops" | grep -E "write.*iops=") || ignore
-			iops_write=$(printf "%s" "$iops_write" | sed 's/.*iops=\([0-9]\+\).*/\1/') || error "Reducing output to iops"
-			if [ "$iops_read" != "" ] && [ "$iops_write" != "" ]; then
+			iops=$(fio --output-format=terse --name="test" "$@") || error "Running test \"$testname\""
+			iops_read=$(printf "%s" "$iops" | cut -d ";" -f 8) || error "Reducing output to iops"
+			iops_write=$(printf "%s" "$iops" | cut -d ";" -f 49) || error "Reducing output to iops"
+			if [ "$iops_read" != "0" ] && [ "$iops_write" != "0" ]; then
 				testresult "$iops_read read iops, $iops_write write iops"
-			elif [ "$iops_read" != "" ]; then
+			elif [ "$iops_read" != "0" ]; then
 				testresult "$iops_read read iops"
-			elif [ "$iops_write" != "" ]; then
+			elif [ "$iops_write" != "0" ]; then
 				testresult "$iops_write write iops"
 			fi;
 		fi;
 	}
 	
 	if $myCleanup; then
+		# remove test directory
 		info "Cleanup"
 		cd "$myPath" || error "Changing to workdir"
 		[ -e "$myDirname/CACHEDIR.TAG" ] || error "Ensuring \"$myPath/$myDirname/CACHEDIR.TAG\" exists"
@@ -199,15 +194,27 @@ else
 		# install fio if missing
 		if ! command -v fio >/dev/null 2>&1; then
 			info "Installing fio"
+			# detect package manager
+			# NOTE: cannot ask user y/n when in remote execution mode
 			if [ -e "/usr/bin/apt-get" ]; then
+				# debian package manager
 				/usr/bin/apt-get -y install fio || error
 			elif [ -e "/usr/bin/yum" ]; then
+				# red hat package manager
 				/usr/bin/yum -y install fio || error
 			elif [ -e "/usr/sbin/pkg" ]; then
-				/usr/sbin/pkg install fio || error
+				# bsd package manager
+				ASSUME_ALWAYS_YES=YES /usr/sbin/pkg install fio || error
 			else
 				error "Detecting install tool"
 			fi;
+		fi;
+		
+		# OS detection
+		if [ $(uname) = "Linux" ]; then
+			fioAio="libaio"
+		else
+			fioAio="posixaio"
 		fi;
 		
 		# create test directory if missing
@@ -236,24 +243,24 @@ else
 		
 		# this test also inits the test files, it must be run first
 		runFio "16 files, 1 thread each, seq 4M writes"            $fioMany        --ioengine=psync   --direct=0 --iodepth=1 --bs=4M  --rw=write --end_fsync=1
-		runFio "16 files, 1 thread each, seq 4M reads, direct"     $fioMany $fioTL --ioengine=libaio  --direct=1 --iodepth=1 --bs=4M  --rw=read    
-		runFio "16 files, 1 thread each, rnd 4k reads, direct"     $fioMany $fioTL --ioengine=libaio  --direct=1 --iodepth=1 --bs=4k  --rw=randread
-		runFio "16 files, 1 thread each, rnd 16k reads, direct"    $fioMany $fioTL --ioengine=libaio  --direct=1 --iodepth=1 --bs=16k --rw=randread
-		runFio "16 files, 1 thread each, rnd 4k writes, direct"    $fioMany $fioTL --ioengine=libaio  --direct=1 --iodepth=1 --bs=4k  --rw=randwrite --fdatasync=1
-		runFio "16 files, 1 thread each, rnd 16k writes, direct"   $fioMany $fioTL --ioengine=libaio  --direct=1 --iodepth=1 --bs=16k --rw=randwrite --fdatasync=1
+		runFio "16 files, 1 thread each, seq 4M reads, direct"     $fioMany $fioTL --ioengine=$fioAio  --direct=1 --iodepth=1 --bs=4M  --rw=read    
+		runFio "16 files, 1 thread each, rnd 4k reads, direct"     $fioMany $fioTL --ioengine=$fioAio  --direct=1 --iodepth=1 --bs=4k  --rw=randread
+		runFio "16 files, 1 thread each, rnd 16k reads, direct"    $fioMany $fioTL --ioengine=$fioAio  --direct=1 --iodepth=1 --bs=16k --rw=randread
+		runFio "16 files, 1 thread each, rnd 4k writes, direct"    $fioMany $fioTL --ioengine=$fioAio  --direct=1 --iodepth=1 --bs=4k  --rw=randwrite --fdatasync=1
+		runFio "16 files, 1 thread each, rnd 16k writes, direct"   $fioMany $fioTL --ioengine=$fioAio  --direct=1 --iodepth=1 --bs=16k --rw=randwrite --fdatasync=1
 		
 		# this test also inits the test file, it must be run first
 		runFio "1 file, 1 thread, seq 4M writes"                   $fioOne        --ioengine=psync    --direct=0 --iodepth=1  --bs=4M  --rw=write --end_fsync=1
-		runFio "1 file, 1 thread, seq 4M reads, direct"            $fioOne $fioTL --ioengine=libaio   --direct=1 --iodepth=1  --bs=4M  --rw=read 
+		runFio "1 file, 1 thread, seq 4M reads, direct"            $fioOne $fioTL --ioengine=$fioAio   --direct=1 --iodepth=1  --bs=4M  --rw=read 
 		runFio "1 file, 16 threads, rnd 16k writes"                $fioOne $fioTL --ioengine=psync    --direct=0 --iodepth=16 --bs=16k --rw=randwrite --fdatasync=1
-		runFio "1 file, 16 threads, rnd 16k writes, direct"        $fioOne $fioTL --ioengine=libaio   --direct=1 --iodepth=16 --bs=16k --rw=randwrite --fdatasync=1
-		runFio "1 file, 16 threads, rnd 16k readwrites, direct"    $fioOne $fioTL --ioengine=libaio   --direct=1 --iodepth=16 --bs=16k --rw=randrw    --fdatasync=1
+		runFio "1 file, 16 threads, rnd 16k writes, direct"        $fioOne $fioTL --ioengine=$fioAio   --direct=1 --iodepth=16 --bs=16k --rw=randwrite --fdatasync=1
+		runFio "1 file, 16 threads, rnd 16k readwrites, direct"    $fioOne $fioTL --ioengine=$fioAio   --direct=1 --iodepth=16 --bs=16k --rw=randrw    --fdatasync=1
 		runFio "1 file, 16 threads, rnd 16k writes, mmap"          $fioOne $fioTL --ioengine=mmap     --direct=1 --iodepth=16 --bs=16k --rw=randwrite --fdatasync=1
 		runFio "1 file, 16 threads, rnd 16k writes, posixaio"      $fioOne $fioTL --ioengine=posixaio --direct=1 --iodepth=16 --bs=16k --rw=randwrite --fdatasync=1
 		
 		runFio "1 file, 1 thread, rnd 16k writes"                  $fioOne $fioTL --ioengine=psync    --direct=0 --iodepth=1  --bs=16k --rw=randwrite --fdatasync=1
-		runFio "1 file, 1 thread, rnd 16k writes, direct"          $fioOne $fioTL --ioengine=libaio   --direct=1 --iodepth=1  --bs=16k --rw=randwrite --fdatasync=1
-		runFio "1 file, 1 thread, rnd 16k readwrites, direct"      $fioOne $fioTL --ioengine=libaio   --direct=1 --iodepth=1  --bs=16k --rw=randrw    --fdatasync=1
+		runFio "1 file, 1 thread, rnd 16k writes, direct"          $fioOne $fioTL --ioengine=$fioAio   --direct=1 --iodepth=1  --bs=16k --rw=randwrite --fdatasync=1
+		runFio "1 file, 1 thread, rnd 16k readwrites, direct"      $fioOne $fioTL --ioengine=$fioAio   --direct=1 --iodepth=1  --bs=16k --rw=randrw    --fdatasync=1
 		
 		if [ "$mySpecificTest" = "" ]; then
 			info "Tests complete on $myHostname @ $(date '+%Y-%m-%d %H:%M:%S')."
