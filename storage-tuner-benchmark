@@ -21,7 +21,7 @@ set -e
 
 #   Source: https://github.com/Korkman/storage-tuner-benchmark
 
-myVersion="1.1.0"
+myVersion="1.1.1"
 
 # trapping "kill 0" to kill subprocesses when interrupted by user
 trap "exit 2" INT TERM
@@ -197,12 +197,14 @@ else
 		cd "$myPath" || error "Changing to workdir"
 		
 		# install fio if missing
-		if [ ! -e "/usr/bin/fio" ]; then
+		if ! command -v fio >/dev/null 2>&1; then
 			info "Installing fio"
 			if [ -e "/usr/bin/apt-get" ]; then
 				/usr/bin/apt-get -y install fio || error
 			elif [ -e "/usr/bin/yum" ]; then
 				/usr/bin/yum -y install fio || error
+			elif [ -e "/usr/sbin/pkg" ]; then
+				/usr/sbin/pkg install fio || error
 			else
 				error "Detecting install tool"
 			fi;
