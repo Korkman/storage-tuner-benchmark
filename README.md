@@ -109,7 +109,7 @@ Files remain. To clean up, add argument "cleanup".
 # FAQ
 
 ## What is "x% HDD" for?
-It's a baseline comparison to give a quick indication of how well your solution compares to a "naive" non-redundant, XFS formatted 6 TB SATA HDD (HGST HUS726060ALE610) on Linux 4.9.88 mounted with options ```rw,noexec,nodev,noatime,nodiratime,largeio,inode64,nobarrier```, having write-cache enabled I/O scheduler set to default CFQ.
+It's a baseline comparison to give a quick indication of how well your solution compares to a "naive" non-redundant, XFS formatted 6 TB SATA HDD (HGST HUS726060ALE610) on Linux 4.9.88 mounted with options ```rw,noexec,nodev,noatime,nodiratime,largeio,inode64,nobarrier```, having write-cache enabled and I/O scheduler set to default CFQ.
 
 ## Should I run only tests I care about?
 No, not in general. Selective testing is only meant for bottleneck resolving. After resolving a bottleneck, always compare full runs from before and after to identify potentially negative impacts on other tests. Also, when sharing results with others, always share full results. Trade-offs in storage tuning are totally legit, but they need to be understood and visible.
