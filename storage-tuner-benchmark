@@ -21,7 +21,7 @@ set -e
 
 #   Source: https://github.com/Korkman/storage-tuner-benchmark
 
-myVersion="2.0.0"
+myVersion="2.1.0"
 
 # trapping "kill 0" to kill subprocesses when interrupted by user
 trap "exit 2" INT TERM
@@ -53,7 +53,7 @@ fi;
 if [ "$1" = "" ] || [ "$1" = "help" ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
 	# if no arguments given or is "help", show usage
 	echo "storage-tuner-benchmark $myVersion"
-	echo ""
+	
 	echo "Quick but meaningful storage benchmark utility"
 	echo ""
 	echo "Usage: storage-tuner-benchmark <target> [path|cleanup [testname|cleanup] ]"
@@ -66,7 +66,7 @@ if [ "$1" = "" ] || [ "$1" = "help" ] || [ "$1" = "-h" ] || [ "$1" = "--help" ];
 	echo "              be created containing test files."
 	echo "              Default: home directory"
 	echo ""
-	echo "testname      Optional. Name of a specific test in quotes."
+	echo "testname      Optional. Name of a specific test in quotes. Requires a full run before."
 	echo "              Default: run all tests"
 	echo ""
 	echo "cleanup       Optional. Deletes test files directory. Run this"
@@ -80,8 +80,8 @@ if [ "$1" = "" ] || [ "$1" = "help" ] || [ "$1" = "-h" ] || [ "$1" = "--help" ];
 	echo "              storage-tuner-benchmark here /mnt"
 	echo "              Creates \"stb-testdir\" in /mnt and runs all tests."
 	echo ""
-	echo "              storage-tuner-benchmark here /mnt \"Many files seq write\""
-	echo "              Repeats the test named \"Many files seq write\"."
+	echo "              storage-tuner-benchmark here /mnt \"16 files, 1 thread each, rnd 16k writes, simple, o_sync\""
+	echo "              Repeats the test named \"16 files, 1 thread each, rnd 16k writes, simple, o_sync\"."
 	echo ""
 	echo "              storage-tuner-benchmark here /mnt cleanup"
 	echo "              Will rm -rf /mnt/stb-testdir"
@@ -101,6 +101,8 @@ elif [ "$1" != "here" ]; then
 
 else
 	# execute tests
+	
+	# initialize variables
 	myHostname="$(uname -n)"
 	myLastinfo=""
 	myDirname="stb-testdir"
@@ -111,6 +113,7 @@ else
 	fioOne="$myFioBasics --size=512M --numjobs=1"
 	myCleanup=false
 	mySpecificTest=""
+	myTestsrun=false
 	if [ "$STB_COLORS" = "yes" ]; then
 		# use colors when interactive terminal
 		colorRed='\033[0;31m'
@@ -134,6 +137,50 @@ else
 		fi;
 	fi;
 	
+	# initialize baseline data for HDD and SSD
+	myBaselineHDD=$(cat <<'HEREDOC'
+storage-tuner-benchmark version 2.1.0-rc1
+Testgroup "current"
+===   1 file series   ===
+1 file, 1 thread, seq 1M writes, simple: 181 write iops (131% HDD)
+1 file, 1 thread, rnd 16k writes, simple: 712 write iops (89% HDD)
+1 file, 1 thread, rnd 16k writes, simple, take 2: 658 write iops
+1 file, 16 threads, rnd 4k writes, posixaio: 351 write iops (100% HDD)
+1 file, 16 threads, rnd 8k writes, posixaio: 424 write iops (108% HDD)
+1 file, 16 threads, rnd 16k writes, posixaio: 447 write iops (105% HDD)
+1 file, 16 threads, rnd 16k writes, posixaio, take 2: 504 write iops
+===  16 file series   ===
+16 files, 1 thread each, seq 1M writes, simple: 150 write iops (130% HDD)
+16 files, 1 thread each, rnd 16k writes, simple: 654 write iops (82% HDD)
+16 files, 1 thread each, rnd 16k writes, simple, take 2: 627 write iops
+16 files, 1 thread each, rnd 16k writes, posixaio: 466 write iops (121% HDD)
+16 files, 16 threads each, rnd 16k writes, posixaio: 537 write iops (89% HDD)
+16 files, 16 threads each, rnd 16k writes, posixaio, take 2: 501 write iops
+===   O_SYNC series   ===
+1 file, 1 thread, rnd 16k writes, simple, o_sync: 155 write iops (107% HDD)
+1 file, 16 threads, rnd 16k writes, posixaio, o_sync: 241 write iops (138% HDD)
+16 files, 1 thread each, rnd 16k writes, simple, o_sync: 505 write iops (107% HDD)
+16 files, 16 threads each, rnd 16k writes, posixaio, o_sync: 509 write iops (106% HDD)
+===    read series    ===
+1 file, 1 thread, seq 1M reads, simple: 3738 read iops (211% HDD)
+1 file, 16 threads, rnd 16k reads, posixaio: 171 read iops (99% HDD)
+16 files, 1 thread each, seq 1M reads, simple: 4045 read iops (147% HDD)
+16 files, 1 thread each, rnd 16k reads, posixaio: 470 read iops (118% HDD)
+16 files, 16 threads each, rnd 16k reads, posixaio: 496 read iops (114% HDD)
+=== native aio series ===
+1 file, 16 threads, rnd 16k writes, native aio: 613 write iops (87% HDD)
+16 files, 16 threads each, rnd 16k writes, native aio: 501 write iops (70% HDD)
+1 file, 16 threads, rnd 16k reads, native aio: 131 read iops (108% HDD)
+16 files, 16 threads each, rnd 16k reads, native aio: 494 read iops (123% HDD)
+HEREDOC
+)
+	
+	myBaselineSSD=$(cat <<'HEREDOC'
+TODO
+HEREDOC
+)
+	
+	# initialize aliases
 	info() {
 		# generic info printout function
 		myLastinfo="$1"
@@ -169,24 +216,79 @@ else
 		printf "%s\n" "$1"
 		printf "$colorReset"
 	}
+	baselineCompare() {
+		# compare iops against a baseline comparison, echo result in percentage
+		baselineCompareTestname="$1"
+		baselineCompareRW="$2"
+		baselineCompareContent="$3"
+		baselineCompareIOPS="$4"
+		
+		if baselineCompareContent=$(echo "$baselineCompareContent" | grep "${testname}:" | grep " $baselineCompareRW iops"); then
+			baselineCompareContent=$(echo "$baselineCompareContent" | sed "s/ $baselineCompareRW iops.*//")
+			baselineCompareContent=$(echo "$baselineCompareContent" | rev | sed "s/ .*//" )
+			baselineCompareContent=$(echo "$baselineCompareContent" | rev)
+			
+			baselineCompareResult=$(( 100 * baselineCompareIOPS / baselineCompareContent ))
+		else
+			baselineCompareResult=""
+		fi;
+		
+		echo "$baselineCompareResult"
+	}
+	baselineFactor() {
+		# fetch and output baseline comparison
+		baselineFactorTestname="$1"
+		baselineFactorRW="$2"
+		baselineFactorIOPS="$3"
+		
+		baselineFactorResultHDD=$(baselineCompare "$baselineFactorTestname" "$baselineFactorRW" "$myBaselineHDD" "$baselineFactorIOPS")
+		baselineFactorResultSSD=$(baselineCompare "$baselineFactorTestname" "$baselineFactorRW" "$myBaselineSSD" "$baselineFactorIOPS")
+		
+		if [ "$baselineFactorResultHDD" != "" ] && [ "$baselineFactorResultSSD" != "" ]; then
+			echo " (${baselineFactorResultHDD}% HDD / ${baselineFactorResultSSD}% SSD)"
+		elif [ "$baselineFactorResultHDD" != "" ]; then
+			echo " (${baselineFactorResultHDD}% HDD)"
+		elif [ "$baselineFactorResultSSD" != "" ]; then
+			echo " (${baselineFactorResultSSD}% SSD)"
+		else
+			echo ""
+		fi;
+	}
 	runFio() {
-		# run fio and output iops only, pass most args to fio
+		# run fio and output iops in a nice to read fashion, pass most args to fio
 		testname="$1"
 		shift
 		if [ "$mySpecificTest" != "" ] && [ "$mySpecificTest" != "$testname" ]; then
+			# test not in selection
 			return
 		else
-			#info "fio --output-format=terse --name=\"test\" \"$*\""
-			testlead "$testname: "
+			# test in selection, inform it will be run
+			myTestsrun=true
+			if [ "$mySpecificTest" = "" ]; then
+				testlead "$testname: "
+			else
+				info "Repeating \"$mySpecificTest\" in \"$myPath/$myDirname\" on $myHostname @ $(date '+%Y-%m-%d %H:%M:%S') ..."
+				info "Full cmd: fio --output-format=terse --name=\"test\" $*"
+				testlead "Result: "
+			fi;
+
+			# run test, cut and display iops
 			iops=$(fio --output-format=terse --name="test" "$@") || error "Running test \"$testname\""
-			iops_read=$(printf "%s" "$iops" | cut -d ";" -f 8) || error "Reducing output to iops"
-			iops_write=$(printf "%s" "$iops" | cut -d ";" -f 49) || error "Reducing output to iops"
-			if [ "$iops_read" != "0" ] && [ "$iops_write" != "0" ]; then
-				testresult "$iops_read read iops, $iops_write write iops"
-			elif [ "$iops_read" != "0" ]; then
-				testresult "$iops_read read iops"
-			elif [ "$iops_write" != "0" ]; then
-				testresult "$iops_write write iops"
+			iopsRead=$(printf "%s" "$iops" | cut -d ";" -f 8) || error "Reducing output to iops"
+			iopsWrite=$(printf "%s" "$iops" | cut -d ";" -f 49) || error "Reducing output to iops"
+			
+			# perform baseline comparison
+			iopsReadFactor=$(baselineFactor "$testname" "read" "$iopsRead")
+			iopsWriteFactor=$(baselineFactor "$testname" "write" "$iopsWrite")
+			
+			if [ "$iopsRead" != "0" ] && [ "$iopsWrite" != "0" ]; then
+				testresult "$iopsRead read iops$iopsReadFactor, $iopsWrite write iops$iopsWriteFactor"
+			elif [ "$iopsRead" != "0" ]; then
+				testresult "$iopsRead read iops$iopsReadFactor"
+			elif [ "$iopsWrite" != "0" ]; then
+				testresult "$iopsWrite write iops$iopsWriteFactor"
+			else
+				testresult "0 read iops, 0 write iops (FAIL!)"
 			fi;
 		fi;
 	}
@@ -255,8 +357,6 @@ else
 		
 		if [ "$mySpecificTest" = "" ]; then
 			info "Running tests in \"$myPath/$myDirname\" on $myHostname @ $(date '+%Y-%m-%d %H:%M:%S') ..."
-		else
-			info "Repeating test \"$mySpecificTest\" in \"$myPath/$myDirname\" on $myHostname @ $(date '+%Y-%m-%d %H:%M:%S') ..."
 		fi;
 		info "storage-tuner-benchmark version $myVersion"
 		
@@ -265,39 +365,42 @@ else
 			# v2.0 testgroup - ready for ZFS
 			# NOTE: to create better comparability, the use of "--direct=1" is now banned and cached reads are just what they are
 			
-			info "===   1 file series   ==="
+			[ "$mySpecificTest" = "" ] && info "===   1 file series   ==="
 			# this test also inits the test file, it must be run first in series
-			runFio "1 file, 1 thread, seq 1M writes, simple"         $fioOne        --ioengine=sync     --iodepth=1 --bs=1M    --rw=write --end_fsync=1
-			runFio "1 file, 1 thread, rnd 16k writes, simple"        $fioOne $fioTL --ioengine=sync     --iodepth=1 --bs=16k   --rw=randwrite --fdatasync=1
-			runFio "1 file, 16 threads, rnd 4k writes, posixaio"     $fioOne $fioTL --ioengine=posixaio --iodepth=16 --bs=4k   --rw=randwrite --fdatasync=1
-			runFio "1 file, 16 threads, rnd 8k writes, posixaio"     $fioOne $fioTL --ioengine=posixaio --iodepth=16 --bs=8k   --rw=randwrite --fdatasync=1
-			runFio "1 file, 16 threads, rnd 16k writes, posixaio"    $fioOne $fioTL --ioengine=posixaio --iodepth=16 --bs=16k  --rw=randwrite --fdatasync=1
-			runFio "1 file, 16 threads, rnd 16k writes, posixaio"    $fioOne $fioTL --ioengine=posixaio --iodepth=16 --bs=16k  --rw=randwrite --fdatasync=1
+			runFio "1 file, 1 thread, seq 1M writes, simple"                 $fioOne        --ioengine=sync     --iodepth=1 --bs=1M    --rw=write --end_fsync=1
+			runFio "1 file, 1 thread, rnd 16k writes, simple"                $fioOne $fioTL --ioengine=sync     --iodepth=1 --bs=16k   --rw=randwrite --fdatasync=1
+			runFio "1 file, 1 thread, rnd 16k writes, simple, take 2"        $fioOne $fioTL --ioengine=sync     --iodepth=1 --bs=16k   --rw=randwrite --fdatasync=1
+			runFio "1 file, 16 threads, rnd 4k writes, posixaio"             $fioOne $fioTL --ioengine=posixaio --iodepth=16 --bs=4k   --rw=randwrite --fdatasync=1
+			runFio "1 file, 16 threads, rnd 8k writes, posixaio"             $fioOne $fioTL --ioengine=posixaio --iodepth=16 --bs=8k   --rw=randwrite --fdatasync=1
+			runFio "1 file, 16 threads, rnd 16k writes, posixaio"            $fioOne $fioTL --ioengine=posixaio --iodepth=16 --bs=16k  --rw=randwrite --fdatasync=1
+			runFio "1 file, 16 threads, rnd 16k writes, posixaio, take 2"    $fioOne $fioTL --ioengine=posixaio --iodepth=16 --bs=16k  --rw=randwrite --fdatasync=1
 			
-			info "===  16 file series   ==="
+			[ "$mySpecificTest" = "" ] && info "===  16 file series   ==="
 			# this test also inits the test files, it must be run first in series
-			runFio "16 files, 1 thread each, seq 1M writes, simple"      $fioMany        --ioengine=sync      --iodepth=1  --bs=1M   --rw=write --end_fsync=1
-			runFio "16 files, 1 thread each, rnd 16k writes, simple"     $fioMany $fioTL --ioengine=sync      --iodepth=1  --bs=16k  --rw=randwrite --fdatasync=1
-			runFio "16 files, 1 thread each, rnd 16k writes, posixaio"   $fioMany $fioTL --ioengine=posixaio  --iodepth=1  --bs=16k  --rw=randwrite --fdatasync=1
-			runFio "16 files, 16 threads each, rnd 16k writes, posixaio" $fioMany $fioTL --ioengine=posixaio  --iodepth=16 --bs=16k  --rw=randwrite --fdatasync=1
+			runFio "16 files, 1 thread each, seq 1M writes, simple"               $fioMany        --ioengine=sync      --iodepth=1  --bs=1M   --rw=write --end_fsync=1
+			runFio "16 files, 1 thread each, rnd 16k writes, simple"              $fioMany $fioTL --ioengine=sync      --iodepth=1  --bs=16k  --rw=randwrite --fdatasync=1
+			runFio "16 files, 1 thread each, rnd 16k writes, simple, take 2"      $fioMany $fioTL --ioengine=sync      --iodepth=1  --bs=16k  --rw=randwrite --fdatasync=1
+			runFio "16 files, 1 thread each, rnd 16k writes, posixaio"            $fioMany $fioTL --ioengine=posixaio  --iodepth=1  --bs=16k  --rw=randwrite --fdatasync=1
+			runFio "16 files, 16 threads each, rnd 16k writes, posixaio"          $fioMany $fioTL --ioengine=posixaio  --iodepth=16 --bs=16k  --rw=randwrite --fdatasync=1
+			runFio "16 files, 16 threads each, rnd 16k writes, posixaio, take 2"  $fioMany $fioTL --ioengine=posixaio  --iodepth=16 --bs=16k  --rw=randwrite --fdatasync=1
 			
-			info "===   O_SYNC series   ==="
+			[ "$mySpecificTest" = "" ] && info "===   O_SYNC series   ==="
 			runFio "1 file, 1 thread, rnd 16k writes, simple, o_sync"            $fioOne $fioTL --ioengine=sync      --iodepth=1  --bs=16k  --rw=randwrite --sync=1
 			runFio "1 file, 16 threads, rnd 16k writes, posixaio, o_sync"        $fioOne $fioTL --ioengine=posixaio  --iodepth=16 --bs=16k  --rw=randwrite --sync=1
 			runFio "16 files, 1 thread each, rnd 16k writes, simple, o_sync"     $fioMany $fioTL --ioengine=sync     --iodepth=1  --bs=16k  --rw=randwrite --sync=1
 			runFio "16 files, 16 threads each, rnd 16k writes, posixaio, o_sync" $fioMany $fioTL --ioengine=posixaio --iodepth=16 --bs=16k  --rw=randwrite --sync=1
 			
 			# read tests, which are less meaningful
-			info "===    read series    ==="
+			[ "$mySpecificTest" = "" ] && info "===    read series    ==="
 			runFio "1 file, 1 thread, seq 1M reads, simple"             $fioOne  $fioTL --ioengine=sync       --iodepth=1  --bs=1M   --rw=read     --invalidate=1
 			runFio "1 file, 16 threads, rnd 16k reads, posixaio"        $fioOne  $fioTL --ioengine=posixaio   --iodepth=16 --bs=16k  --rw=randread --invalidate=1 --sync=1
 			runFio "16 files, 1 thread each, seq 1M reads, simple"      $fioMany $fioTL --ioengine=sync       --iodepth=1  --bs=1M   --rw=read     --invalidate=1
 			runFio "16 files, 1 thread each, rnd 16k reads, posixaio"   $fioMany $fioTL --ioengine=posixaio   --iodepth=1  --bs=16k  --rw=randread --invalidate=1 --sync=1
 			runFio "16 files, 16 threads each, rnd 16k reads, posixaio" $fioMany $fioTL --ioengine=posixaio   --iodepth=16 --bs=16k  --rw=randread --invalidate=1 --sync=1
 			
-			# native aio tests
+			# native aio tests - only on supported platforms
 			if [ "$fioAio" != "" ]; then
-				info "=== native aio series ==="
+				[ "$mySpecificTest" = "" ] && info "=== native aio series ==="
 				runFio "1 file, 16 threads, rnd 16k writes, native aio"         $fioOne  $fioTL --ioengine=$fioAio  --iodepth=16 --bs=16k  --rw=randwrite --fdatasync=1
 				runFio "16 files, 16 threads each, rnd 16k writes, native aio"  $fioMany $fioTL --ioengine=$fioAio  --iodepth=16 --bs=16k  --rw=randwrite --fdatasync=1
 				runFio "1 file, 16 threads, rnd 16k reads, native aio"          $fioOne  $fioTL --ioengine=$fioAio  --iodepth=16 --bs=16k  --rw=randread --invalidate=1 --sync=1
@@ -333,13 +436,15 @@ else
 			error "Finding testgroup \"$STB_TESTGROUP\""
 		fi;
 		
-		
 		if [ "$mySpecificTest" = "" ]; then
 			info "Tests complete on $myHostname @ $(date '+%Y-%m-%d %H:%M:%S')."
 			info "Files remain. To clean up, add argument \"cleanup\"."
-			info "To run only a specific test, add its name in quotes as argument, e.g. \"Many files seq write\""
 		else
-			info "Test complete on $myHostname @ $(date '+%Y-%m-%d %H:%M:%S')."
+			if ! $myTestsrun; then
+				error "Looking up test \"$mySpecificTest\""
+			else
+				info "Test complete on $myHostname @ $(date '+%Y-%m-%d %H:%M:%S')."
+			fi;
 		fi;
 	fi;
 	# defuse trap and exit
