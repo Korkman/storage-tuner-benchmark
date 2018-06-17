@@ -184,7 +184,7 @@ Deep queue test, with a total of 16 * 16 = 256 parallel writers. Big distributed
 16 files, 1 thread each, rnd 16k writes, simple, o_sync: 472 write iops (93% HDD)
 16 files, 16 threads each, rnd 16k writes, posixaio, o_sync: 298 write iops (58% HDD)
 ```
-O_SYNC puts the requirement on the storage stack that each write actually hits "stable storage". There are varying interpretations of what "stable storage" is across operating systems and how to force data onto a disk with write-cache turned on. An interesting test here is to turn off write-cache and see the numbers rise, because cache flushes interfere with parallelism.
+O_SYNC puts the requirement on the storage stack that each write actually hits "stable storage". There are varying interpretations of what "stable storage" is across operating systems and how to force data onto a disk with write-cache turned on.
 
 ## read series
 ```
