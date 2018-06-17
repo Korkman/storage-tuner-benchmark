@@ -51,7 +51,7 @@ or yum when missing.
 Creates "stb-testdir" in /mnt and runs all tests.
 
 ./storage-tuner-benchmark here /mnt "1 file, 1 thread, seq 1M writes"
-Repeats the test named "1 file, 1 thread, rnd 16k writes, simple, o_sync".
+Repeats the test named "1 file, 1 thread, seq 1M writes".
 
 ./storage-tuner-benchmark here /mnt cleanup
 Will remove the test directory.
